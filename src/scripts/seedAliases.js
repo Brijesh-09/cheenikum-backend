@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import mongoose from 'mongoose';
-import SugarAlias from '../src/models/SugarAlias.model.js';
+import SugarAlias from '../models/sugaraalias.model.js';
 
 const aliases = [
     { alias: 'high fructose corn syrup', displayName: 'High-fructose corn syrup', severity: 'high' },

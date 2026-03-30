@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import mongoose from 'mongoose';
-import Product from '../src/models/Product.model.js';
+import Product from '../models/Product.model.js';
 
 // Verified sugar data for popular Indian packaged foods.
 // sugarPer100g sourced from official brand nutrition labels.

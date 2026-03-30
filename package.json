@@ -5,8 +5,8 @@
   "scripts": {
     "dev": "nodemon src/app.js",
     "start": "node src/app.js",
-    "seed:snacks": "node scripts/seedSnacks.js",
-    "seed:aliases": "node scripts/seedAliases.js",
+    "seed:snacks": "node src/scripts/seedSnacks.js",
+    "seed:aliases": "node src/scripts/seedAliases.js",
     "seed": "npm run seed:aliases && npm run seed:snacks"
   },
   "dependencies": {
