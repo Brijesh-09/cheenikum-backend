@@ -1,9 +1,27 @@
 import 'dotenv/config';
 import express from 'express';
+import cors from 'cors';
 import { connectDB } from './config/db.js';
 import scanRoutes from './routes/scan.routes.js';
 
 const app = express();
+
+const allowedOrigins = [
+    'https://sugarscan-frontend.vercel.app',
+];
+
+app.use(cors({
+    origin: function (origin, callback) {
+        if (!origin) return callback(null, true);
+
+        if (allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('CORS not allowed'));
+        }
+    },
+    credentials: true
+}));
 app.use(express.json({ limit: '10mb' })); // allow base64 label photos
 
 app.use('/api/scan', scanRoutes);
