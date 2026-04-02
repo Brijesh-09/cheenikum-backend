@@ -1,12 +1,16 @@
 import axios from 'axios';
-import Anthropic from '@anthropic-ai/sdk';
+//import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import Product from '../models/Product.model.js';
 import SugarAlias from '../models/sugaraalias.model.js';
 
 const GRAMS_PER_TEASPOON = 4.2;
 export const WHO_DAILY_LIMIT_G = 25;
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+//const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // ─── Converters ───────────────────────────────────────────────────────────────
 
@@ -84,43 +88,93 @@ const mapCategory = (tags) => {
 // company websites, FSSAI listings, or Indian retail pages.
 // Result is cached to DB so this never runs twice for the same product.
 
+// export const fetchFromAIWebSearch = async (barcode) => {
+//     try {
+//         const response = await anthropic.messages.create({
+//             model: 'claude-opus-4-5',
+//             max_tokens: 1024,
+//             tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+//             messages: [
+//                 {
+//                     role: 'user',
+//                     content: `Find the nutrition information for the Indian packaged food product with barcode ${barcode}.
+// Search for the product name, brand, and nutrition facts especially sugar content per 100g.
+// Look at company websites, FSSAI data, BigBasket, Amazon India, or any Indian retail site.
+
+// Return ONLY a JSON object with this exact structure, no extra text:
+// {
+//   "found": true or false,
+//   "name": "product name",
+//   "brand": "brand name",
+//   "category": "biscuit|beverage|snack|savory|dairy|other",
+//   "servingSizeG": 100,
+//   "sugarPer100g": 0,
+//   "totalCarbsPer100g": 0,
+//   "caloriesPer100g": 0,
+//   "ingredients": ["ingredient1", "ingredient2"]
+// }
+
+// If you cannot find reliable nutrition data for this specific product, return { "found": false }.`,
+//                 },
+//             ],
+//         });
+
+//         // Extract the final text response which should be our JSON
+//         const textBlock = response.content.find((b) => b.type === 'text');
+//         if (!textBlock) return null;
+
+//         // Strip any markdown code fences if present
+//         const clean = textBlock.text.replace(/```json|```/g, '').trim();
+//         const parsed = JSON.parse(clean);
+
+//         if (!parsed.found || !parsed.name) return null;
+
+//         return {
+//             barcode,
+//             name: parsed.name,
+//             brand: parsed.brand || 'Unknown',
+//             category: parsed.category || 'other',
+//             servingSize: { value: parsed.servingSizeG || 100, unit: 'g' },
+//             nutrients: {
+//                 sugarPer100g: parseFloat(parsed.sugarPer100g) || 0,
+//                 totalCarbsPer100g: parseFloat(parsed.totalCarbsPer100g) || 0,
+//                 caloriesPer100g: parseFloat(parsed.caloriesPer100g) || 0,
+//             },
+//             ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients : [],
+//             source: 'web_sourced',
+//         };
+//     } catch (err) {
+//         console.error('AI web search failed:', err.message);
+//         return null;
+//     }
+// };
+
 export const fetchFromAIWebSearch = async (barcode) => {
     try {
-        const response = await anthropic.messages.create({
-            model: 'claude-opus-4-5',
-            max_tokens: 1024,
-            tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-            messages: [
-                {
-                    role: 'user',
-                    content: `Find the nutrition information for the Indian packaged food product with barcode ${barcode}.
-Search for the product name, brand, and nutrition facts especially sugar content per 100g.
-Look at company websites, FSSAI data, BigBasket, Amazon India, or any Indian retail site.
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-Return ONLY a JSON object with this exact structure, no extra text:
+        const prompt = `Find the nutrition information for the Indian packaged food product with barcode ${barcode}.
+
+Search for product name, brand, and nutrition facts especially sugar per 100g.
+
+Return ONLY JSON:
 {
   "found": true or false,
-  "name": "product name",
-  "brand": "brand name",
+  "name": "",
+  "brand": "",
   "category": "biscuit|beverage|snack|savory|dairy|other",
   "servingSizeG": 100,
   "sugarPer100g": 0,
   "totalCarbsPer100g": 0,
   "caloriesPer100g": 0,
-  "ingredients": ["ingredient1", "ingredient2"]
-}
+  "ingredients": []
+}`;
 
-If you cannot find reliable nutrition data for this specific product, return { "found": false }.`,
-                },
-            ],
-        });
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const text = response.text();
 
-        // Extract the final text response which should be our JSON
-        const textBlock = response.content.find((b) => b.type === 'text');
-        if (!textBlock) return null;
-
-        // Strip any markdown code fences if present
-        const clean = textBlock.text.replace(/```json|```/g, '').trim();
+        const clean = text.replace(/```json|```/g, "").trim();
         const parsed = JSON.parse(clean);
 
         if (!parsed.found || !parsed.name) return null;
@@ -139,8 +193,9 @@ If you cannot find reliable nutrition data for this specific product, return { "
             ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients : [],
             source: 'web_sourced',
         };
+
     } catch (err) {
-        console.error('AI web search failed:', err.message);
+        console.error("Gemini web search failed:", err.message);
         return null;
     }
 };
@@ -150,47 +205,98 @@ If you cannot find reliable nutrition data for this specific product, return { "
 // Claude reads it like a human would — handles any format, angle, language.
 // Returns structured nutrition data directly, no regex needed.
 
+// export const extractFromLabelImage = async (base64Image, mimeType = 'image/jpeg') => {
+//     try {
+//         const response = await anthropic.messages.create({
+//             model: 'claude-opus-4-5',
+//             max_tokens: 1024,
+//             messages: [
+//                 {
+//                     role: 'user',
+//                     content: [
+//                         {
+//                             type: 'image',
+//                             source: { type: 'base64', media_type: mimeType, data: base64Image },
+//                         },
+//                         {
+//                             type: 'text',
+//                             text: `This is a photo of a nutrition label from an Indian packaged food product.
+// Extract all nutrition information you can see.
+
+// Return ONLY a JSON object with this exact structure, no extra text:
+// {
+//   "found": true or false,
+//   "productName": "name if visible on label, else null",
+//   "sugarPer100g": number,
+//   "totalCarbsPer100g": number,
+//   "caloriesPer100g": number,
+//   "servingSizeG": number or null,
+//   "ingredients": ["ingredient1", "ingredient2"] or [],
+//   "confidence": "high|medium|low"
+// }
+
+// If the image is not a nutrition label or values are unreadable, return { "found": false }.`,
+//                         },
+//                     ],
+//                 },
+//             ],
+//         });
+
+//         const textBlock = response.content.find((b) => b.type === 'text');
+//         if (!textBlock) return null;
+
+//         const clean = textBlock.text.replace(/```json|```/g, '').trim();
+//         const parsed = JSON.parse(clean);
+
+//         if (!parsed.found) return null;
+
+//         return {
+//             sugarPer100g: parseFloat(parsed.sugarPer100g) || 0,
+//             totalCarbsPer100g: parseFloat(parsed.totalCarbsPer100g) || 0,
+//             caloriesPer100g: parseFloat(parsed.caloriesPer100g) || 0,
+//             servingSizeG: parsed.servingSizeG || 100,
+//             productName: parsed.productName || null,
+//             ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients : [],
+//             confidence: parsed.confidence || 'medium',
+//         };
+//     } catch (err) {
+//         console.error('AI vision failed:', err.message);
+//         return null;
+//     }
+// };
+
 export const extractFromLabelImage = async (base64Image, mimeType = 'image/jpeg') => {
     try {
-        const response = await anthropic.messages.create({
-            model: 'claude-opus-4-5',
-            max_tokens: 1024,
-            messages: [
-                {
-                    role: 'user',
-                    content: [
-                        {
-                            type: 'image',
-                            source: { type: 'base64', media_type: mimeType, data: base64Image },
-                        },
-                        {
-                            type: 'text',
-                            text: `This is a photo of a nutrition label from an Indian packaged food product.
-Extract all nutrition information you can see.
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-Return ONLY a JSON object with this exact structure, no extra text:
+        const prompt = `This is a nutrition label from an Indian packaged food product.
+
+Extract and return ONLY JSON:
 {
   "found": true or false,
-  "productName": "name if visible on label, else null",
-  "sugarPer100g": number,
-  "totalCarbsPer100g": number,
-  "caloriesPer100g": number,
-  "servingSizeG": number or null,
-  "ingredients": ["ingredient1", "ingredient2"] or [],
+  "productName": "",
+  "sugarPer100g": 0,
+  "totalCarbsPer100g": 0,
+  "caloriesPer100g": 0,
+  "servingSizeG": 0,
+  "ingredients": [],
   "confidence": "high|medium|low"
-}
+}`;
 
-If the image is not a nutrition label or values are unreadable, return { "found": false }.`,
-                        },
-                    ],
+        const result = await model.generateContent([
+            prompt,
+            {
+                inlineData: {
+                    data: base64Image,
+                    mimeType: mimeType,
                 },
-            ],
-        });
+            },
+        ]);
 
-        const textBlock = response.content.find((b) => b.type === 'text');
-        if (!textBlock) return null;
+        const response = await result.response;
+        const text = response.text();
 
-        const clean = textBlock.text.replace(/```json|```/g, '').trim();
+        const clean = text.replace(/```json|```/g, "").trim();
         const parsed = JSON.parse(clean);
 
         if (!parsed.found) return null;
@@ -204,8 +310,9 @@ If the image is not a nutrition label or values are unreadable, return { "found"
             ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients : [],
             confidence: parsed.confidence || 'medium',
         };
+
     } catch (err) {
-        console.error('AI vision failed:', err.message);
+        console.error("Gemini vision failed:", err.message);
         return null;
     }
 };
