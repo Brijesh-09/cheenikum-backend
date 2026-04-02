@@ -7,7 +7,7 @@ import {
     gramToTeaspoon,
     WHO_DAILY_LIMIT_G,
     detectHiddenSugars,
-} from '../service/sugar.service.js';
+} from '../services/sugar.service.js';
 
 // ─── Barcode normalisation ────────────────────────────────────────────────────
 const normaliseBarcode = (raw) => {
