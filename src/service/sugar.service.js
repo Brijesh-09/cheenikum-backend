@@ -267,7 +267,7 @@ Return ONLY JSON:
 
 export const extractFromLabelImage = async (base64Image, mimeType = 'image/jpeg') => {
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
         const prompt = `This is a nutrition label from an Indian packaged food product.
 
