@@ -86,8 +86,8 @@ const mapCategory = (tags) => {
 export const fetchFromAIWebSearch = async (barcode) => {
     try {
         const model = genAI.getGenerativeModel({
-            model: 'gemini-1.5-flash',
-            tools: [{ googleSearch: {} }], // Google Search grounding — free tier included
+            model: 'gemini-2.0-flash',
+            tools: [{ googleSearch: {} }],
         });
 
         const prompt = `Search and find the nutrition information for the Indian packaged food product with barcode ${barcode}.
@@ -145,7 +145,7 @@ If you cannot find reliable nutrition data for this exact product, return: {"fou
 
 export const extractFromLabelImage = async (base64Image, mimeType = 'image/jpeg') => {
     try {
-        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
         const imagePart = {
             inlineData: { data: base64Image, mimeType },
