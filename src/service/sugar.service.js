@@ -151,7 +151,7 @@ const mapCategory = (tags) => {
 
 export const fetchFromAIWebSearch = async (barcode) => {
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
         const prompt = `Find the nutrition information for the Indian packaged food product with barcode ${barcode}.
 
