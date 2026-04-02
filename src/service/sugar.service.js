@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import Product from '../models/Product.model.js';
-import SugarAlias from '../models/SugarAlias.model.js';
+import SugarAlias from '../models/sugaraalias.model.js';
 
 const GRAMS_PER_TEASPOON = 4.2;
 export const WHO_DAILY_LIMIT_G = 25;
