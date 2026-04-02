@@ -12,6 +12,26 @@ export const WHO_DAILY_LIMIT_G = 25;
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+
+const logGeminiError = (err) => {
+    console.error("❌ GEMINI ERROR START ----------------");
+
+    if (err?.response) {
+        console.error("Status:", err.response.status);
+        console.error("Headers:", err.response.headers);
+        console.error("Data:", JSON.stringify(err.response.data, null, 2));
+    }
+
+    if (err?.message) {
+        console.error("Message:", err.message);
+    }
+
+    if (err?.stack) {
+        console.error("Stack:", err.stack);
+    }
+
+    console.error("❌ GEMINI ERROR END ----------------");
+};
 // ─── Converters ───────────────────────────────────────────────────────────────
 
 export const gramToTeaspoon = (g) => parseFloat((g / GRAMS_PER_TEASPOON).toFixed(2));
