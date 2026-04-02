@@ -20,11 +20,12 @@ const ProductSchema = new mongoose.Schema(
             caloriesPer100g: { type: Number, default: 0 },
         },
         ingredients: [String],
-        // 'verified' = manually seeded Indian snacks (most trustworthy)
-        // 'openfoodfacts' = fetched + cached from OFF
+        // verified      = manually seeded (most trustworthy)
+        // openfoodfacts = fetched from OFF and cached
+        // web_sourced   = AI searched the web for real company data and cached
         source: {
             type: String,
-            enum: ['verified', 'openfoodfacts'],
+            enum: ['verified', 'openfoodfacts', 'web_sourced'],
             default: 'openfoodfacts',
         },
     },

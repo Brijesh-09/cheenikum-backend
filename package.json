@@ -10,6 +10,7 @@
     "seed": "npm run seed:aliases && npm run seed:snacks"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.82.0",
     "axios": "^1.6.0",
     "cors": "^2.8.6",
     "dotenv": "^16.3.1",

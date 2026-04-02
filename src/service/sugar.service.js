@@ -1,9 +1,12 @@
 import axios from 'axios';
+import Anthropic from '@anthropic-ai/sdk';
 import Product from '../models/Product.model.js';
 import SugarAlias from '../models/sugaraalias.model.js';
 
 const GRAMS_PER_TEASPOON = 4.2;
 export const WHO_DAILY_LIMIT_G = 25;
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ─── Converters ───────────────────────────────────────────────────────────────
 
@@ -28,7 +31,7 @@ export const detectHiddenSugars = async (ingredients = []) => {
         .map((a) => ({ name: a.displayName, severity: a.severity }));
 };
 
-// ─── Open Food Facts fetch + normalise ───────────────────────────────────────
+// ─── Open Food Facts ──────────────────────────────────────────────────────────
 
 export const fetchFromOFF = async (barcode) => {
     try {
@@ -75,37 +78,139 @@ const mapCategory = (tags) => {
     return 'other';
 };
 
-// ─── Parse nutrition label image (base64) ────────────────────────────────────
-// Called when barcode lookup fails entirely.
-// Parses the label text client sends (OCR output or raw text) to extract sugar.
+// ─── AI web search for unknown barcodes ──────────────────────────────────────
+// Called only when DB + OFF both return nothing.
+// Uses Claude with web_search tool to find real nutrition data from
+// company websites, FSSAI listings, or Indian retail pages.
+// Result is cached to DB so this never runs twice for the same product.
 
-export const parseLabelText = (text) => {
-    if (!text) return null;
+export const fetchFromAIWebSearch = async (barcode) => {
+    try {
+        const response = await anthropic.messages.create({
+            model: 'claude-opus-4-5',
+            max_tokens: 1024,
+            tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+            messages: [
+                {
+                    role: 'user',
+                    content: `Find the nutrition information for the Indian packaged food product with barcode ${barcode}.
+Search for the product name, brand, and nutrition facts especially sugar content per 100g.
+Look at company websites, FSSAI data, BigBasket, Amazon India, or any Indian retail site.
 
-    // Normalise: lowercase, collapse whitespace
-    const s = text.toLowerCase().replace(/\s+/g, ' ');
+Return ONLY a JSON object with this exact structure, no extra text:
+{
+  "found": true or false,
+  "name": "product name",
+  "brand": "brand name",
+  "category": "biscuit|beverage|snack|savory|dairy|other",
+  "servingSizeG": 100,
+  "sugarPer100g": 0,
+  "totalCarbsPer100g": 0,
+  "caloriesPer100g": 0,
+  "ingredients": ["ingredient1", "ingredient2"]
+}
 
-    // Try to extract sugar per 100g — handles formats like:
-    //   "sugars 17g", "sugar 17.5 g", "total sugars 17 g per 100g"
-    const patterns = [
-        /(?:total\s+)?sugars?\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*g/,
-        /sugar\s+(\d+(?:\.\d+)?)/,
-    ];
+If you cannot find reliable nutrition data for this specific product, return { "found": false }.`,
+                },
+            ],
+        });
 
-    for (const re of patterns) {
-        const m = s.match(re);
-        if (m) {
-            return {
-                sugarPer100g: parseFloat(m[1]),
-                source: 'label_parse',
-            };
-        }
+        // Extract the final text response which should be our JSON
+        const textBlock = response.content.find((b) => b.type === 'text');
+        if (!textBlock) return null;
+
+        // Strip any markdown code fences if present
+        const clean = textBlock.text.replace(/```json|```/g, '').trim();
+        const parsed = JSON.parse(clean);
+
+        if (!parsed.found || !parsed.name) return null;
+
+        return {
+            barcode,
+            name: parsed.name,
+            brand: parsed.brand || 'Unknown',
+            category: parsed.category || 'other',
+            servingSize: { value: parsed.servingSizeG || 100, unit: 'g' },
+            nutrients: {
+                sugarPer100g: parseFloat(parsed.sugarPer100g) || 0,
+                totalCarbsPer100g: parseFloat(parsed.totalCarbsPer100g) || 0,
+                caloriesPer100g: parseFloat(parsed.caloriesPer100g) || 0,
+            },
+            ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients : [],
+            source: 'web_sourced',
+        };
+    } catch (err) {
+        console.error('AI web search failed:', err.message);
+        return null;
     }
-
-    return null;
 };
 
-// ─── Build the unified response shape ─────────────────────────────────────────
+// ─── AI Vision — scan nutrition label image ───────────────────────────────────
+// Accepts a base64 image of a nutrition panel.
+// Claude reads it like a human would — handles any format, angle, language.
+// Returns structured nutrition data directly, no regex needed.
+
+export const extractFromLabelImage = async (base64Image, mimeType = 'image/jpeg') => {
+    try {
+        const response = await anthropic.messages.create({
+            model: 'claude-opus-4-5',
+            max_tokens: 1024,
+            messages: [
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'image',
+                            source: { type: 'base64', media_type: mimeType, data: base64Image },
+                        },
+                        {
+                            type: 'text',
+                            text: `This is a photo of a nutrition label from an Indian packaged food product.
+Extract all nutrition information you can see.
+
+Return ONLY a JSON object with this exact structure, no extra text:
+{
+  "found": true or false,
+  "productName": "name if visible on label, else null",
+  "sugarPer100g": number,
+  "totalCarbsPer100g": number,
+  "caloriesPer100g": number,
+  "servingSizeG": number or null,
+  "ingredients": ["ingredient1", "ingredient2"] or [],
+  "confidence": "high|medium|low"
+}
+
+If the image is not a nutrition label or values are unreadable, return { "found": false }.`,
+                        },
+                    ],
+                },
+            ],
+        });
+
+        const textBlock = response.content.find((b) => b.type === 'text');
+        if (!textBlock) return null;
+
+        const clean = textBlock.text.replace(/```json|```/g, '').trim();
+        const parsed = JSON.parse(clean);
+
+        if (!parsed.found) return null;
+
+        return {
+            sugarPer100g: parseFloat(parsed.sugarPer100g) || 0,
+            totalCarbsPer100g: parseFloat(parsed.totalCarbsPer100g) || 0,
+            caloriesPer100g: parseFloat(parsed.caloriesPer100g) || 0,
+            servingSizeG: parsed.servingSizeG || 100,
+            productName: parsed.productName || null,
+            ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients : [],
+            confidence: parsed.confidence || 'medium',
+        };
+    } catch (err) {
+        console.error('AI vision failed:', err.message);
+        return null;
+    }
+};
+
+// ─── Build unified response ───────────────────────────────────────────────────
 
 export const buildResponse = async (product, servings) => {
     const { sugarGrams, sugarTeaspoons } = computeSugar(product, servings);
@@ -129,8 +234,7 @@ export const buildResponse = async (product, servings) => {
                 servingSizeG: product.servingSize.value,
             },
             dailyLimitPct: pctDaily,
-            dailyLimitStatus:
-                pctDaily <= 40 ? 'low' : pctDaily <= 80 ? 'moderate' : 'high',
+            dailyLimitStatus: pctDaily <= 40 ? 'low' : pctDaily <= 80 ? 'moderate' : 'high',
         },
         hiddenSugars,
         warning:

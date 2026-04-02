@@ -1,94 +1,137 @@
 import Product from '../models/Product.model.js';
 import {
     fetchFromOFF,
-    parseLabelText,
+    fetchFromAIWebSearch,
+    extractFromLabelImage,
     buildResponse,
+    gramToTeaspoon,
+    WHO_DAILY_LIMIT_G,
+    detectHiddenSugars,
 } from '../service/sugar.service.js';
 
-/**
- * POST /api/scan/barcode
- * Body: { barcode: "8901234567890", servings?: 1 }
- *
- * Flow:
- *   1. Check local DB (pre-seeded Indian snacks + cached products)
- *   2. Try Open Food Facts → cache result
- *   3. If still nothing → 404 with hint to scan label
- */
+// ─── Barcode normalisation ────────────────────────────────────────────────────
+const normaliseBarcode = (raw) => {
+    const b = String(raw).trim().replace(/\s/g, '');
+    const candidates = [b];
+    if (b.length === 12 && /^\d+$/.test(b)) candidates.push('0' + b);
+    if (b.length === 14 && b.startsWith('0')) candidates.push(b.slice(1));
+    return candidates;
+};
+
+// ─── POST /api/scan/barcode ───────────────────────────────────────────────────
+// Flow: DB → Open Food Facts → AI web search → 404
 export const scanBarcode = async (req, res, next) => {
     try {
-        const { barcode, servings = 1 } = req.body;
-        if (!barcode) return res.status(400).json({ error: 'barcode is required' });
+        const { barcode: rawBarcode, servings = 1 } = req.body;
+        if (!rawBarcode) return res.status(400).json({ error: 'barcode is required' });
 
-        // 1. Local DB — fastest, seeded Indian snacks live here
-        let product = await Product.findOne({ barcode }).lean();
+        const candidates = normaliseBarcode(rawBarcode);
 
-        // 2. Open Food Facts fallback → cache it so next scan is instant
+        // 1. Local DB
+        let product = await Product.findOne({ barcode: { $in: candidates } }).lean();
+
+        // 2. Open Food Facts
         if (!product) {
-            const offData = await fetchFromOFF(barcode);
-            if (offData) {
-                product = (await Product.create(offData)).toObject();
+            for (const candidate of candidates) {
+                const offData = await fetchFromOFF(candidate);
+                if (!offData) continue;
+                product = await Product.findOneAndUpdate(
+                    { barcode: offData.barcode },
+                    { $setOnInsert: offData },
+                    { upsert: true, new: true, lean: true }
+                );
+                break;
             }
         }
 
-        // 3. Not found anywhere
+        // 3. AI web search — finds real data from company sites, caches permanently
+        if (!product) {
+            const aiData = await fetchFromAIWebSearch(candidates[0]);
+            if (aiData) {
+                product = await Product.findOneAndUpdate(
+                    { barcode: aiData.barcode },
+                    { $setOnInsert: aiData },
+                    { upsert: true, new: true, lean: true }
+                );
+            }
+        }
+
+        // 4. Nothing found anywhere
         if (!product) {
             return res.status(404).json({
                 found: false,
-                error: 'Product not found.',
-                hint: 'Try scanning the nutrition label directly via POST /api/scan/label',
+                error: 'Product not found anywhere.',
+                hint: 'Scan the nutrition label on the pack for instant results.',
             });
         }
 
-        return res.json(await buildResponse(product, servings));
+        return res.json(await buildResponse(product, Number(servings)));
     } catch (err) {
         next(err);
     }
 };
 
-/**
- * POST /api/scan/label
- * Body: { labelText: "<OCR or raw text from nutrition panel>", servings?: 1 }
- *
- * Used when barcode fails. Client does OCR on the label photo and sends
- * the raw text here. We parse sugar from it and return a lightweight response.
- * No DB write — this is ephemeral.
- *
- * Later: replace labelText with base64 image + call AI vision model.
- */
+// ─── POST /api/scan/label ─────────────────────────────────────────────────────
+// Primary flow: user photographs the nutrition label.
+// Claude Vision reads the label image and extracts all values.
+// Body: { imageBase64: "...", mimeType?: "image/jpeg", servings?: 1 }
 export const scanLabel = async (req, res, next) => {
     try {
-        const { labelText, servings = 1 } = req.body;
-        if (!labelText) return res.status(400).json({ error: 'labelText is required' });
+        const { imageBase64, mimeType = 'image/jpeg', servings = 1 } = req.body;
 
-        const parsed = parseLabelText(labelText);
+        if (!imageBase64) {
+            return res.status(400).json({ error: 'imageBase64 is required' });
+        }
 
-        if (!parsed) {
+        const extracted = await extractFromLabelImage(imageBase64, mimeType);
+
+        if (!extracted) {
             return res.status(422).json({
                 found: false,
-                error: 'Could not extract sugar from label text.',
-                hint: 'Ensure the text includes sugar content, e.g. "Sugars 17g"',
+                error: 'Could not read nutrition values from this image.',
+                hint: 'Make sure the photo is of the nutrition facts panel, well-lit and in focus.',
             });
         }
 
-        const { gramToTeaspoon, WHO_DAILY_LIMIT_G } = await import('../services/sugar.service.js');
-
-        // Build a lightweight ephemeral product object (not saved to DB)
-        const sugarGrams = parseFloat(((parsed.sugarPer100g / 100) * 100 * servings).toFixed(2));
+        const numServings = Number(servings);
+        const servingSizeG = extracted.servingSizeG || 100;
+        const rawGrams = (extracted.sugarPer100g / 100) * servingSizeG * numServings;
+        const sugarGrams = parseFloat(rawGrams.toFixed(2));
         const sugarTeaspoons = gramToTeaspoon(sugarGrams);
         const pctDaily = parseFloat(((sugarGrams / WHO_DAILY_LIMIT_G) * 100).toFixed(1));
 
+        // Run hidden sugar detection on extracted ingredients if available
+        const hiddenSugars = await detectHiddenSugars(extracted.ingredients || []);
+
         return res.json({
             found: true,
-            product: { name: 'Unknown product', brand: 'Unknown', source: 'label_parse' },
+            product: {
+                name: extracted.productName || 'Scanned product',
+                brand: 'From label',
+                category: 'other',
+                source: 'label_scan',
+            },
             sugar: {
-                per100g: parsed.sugarPer100g,
-                perServing: { grams: sugarGrams, teaspoons: sugarTeaspoons, servings, servingSizeG: 100 },
+                per100g: extracted.sugarPer100g,
+                perServing: {
+                    grams: sugarGrams,
+                    teaspoons: sugarTeaspoons,
+                    servings: numServings,
+                    servingSizeG,
+                },
                 dailyLimitPct: pctDaily,
                 dailyLimitStatus: pctDaily <= 40 ? 'low' : pctDaily <= 80 ? 'moderate' : 'high',
+                totalCarbs: extracted.totalCarbsPer100g,
+                calories: extracted.caloriesPer100g,
             },
-            hiddenSugars: [],
-            warning: null,
-            note: 'Parsed from label text. Accuracy depends on OCR quality.',
+            hiddenSugars,
+            warning: hiddenSugars.length > 0
+                ? `Contains ${hiddenSugars.length} hidden sugar source(s)`
+                : null,
+            confidence: extracted.confidence,
+            note: extracted.confidence === 'low'
+                ? 'Low confidence read — verify values on the pack.'
+                : null,
         });
     } catch (err) {
         next(err);
