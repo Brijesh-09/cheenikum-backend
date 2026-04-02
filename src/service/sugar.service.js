@@ -267,11 +267,14 @@ Return ONLY JSON:
 
 export const extractFromLabelImage = async (base64Image, mimeType = 'image/jpeg') => {
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+        console.log("📸 Gemini Vision called...");
+        console.log("Image size:", base64Image?.length);
 
-        const prompt = `This is a nutrition label from an Indian packaged food product.
+        const model = genAI.getGenerativeModel({
+            model: "gemini-1.5-flash-latest",
+        });
 
-Extract and return ONLY JSON:
+        const prompt = `Extract nutrition info and return ONLY JSON:
 {
   "found": true or false,
   "productName": "",
@@ -288,18 +291,27 @@ Extract and return ONLY JSON:
             {
                 inlineData: {
                     data: base64Image,
-                    mimeType: mimeType,
+                    mimeType,
                 },
             },
         ]);
 
+        console.log("✅ Gemini response received");
+
         const response = await result.response;
         const text = response.text();
 
-        const clean = text.replace(/```json|```/g, "").trim();
-        const parsed = JSON.parse(clean);
+        console.log("🧾 Raw Gemini output:", text);
 
-        if (!parsed.found) return null;
+        const clean = text.replace(/```json|```/g, "").trim();
+        const parsed = safeJSONParse(clean);
+
+        console.log("🧠 Parsed output:", parsed);
+
+        if (!parsed || !parsed.found) {
+            console.log("⚠️ Gemini could not extract data");
+            return null;
+        }
 
         return {
             sugarPer100g: parseFloat(parsed.sugarPer100g) || 0,
@@ -312,7 +324,7 @@ Extract and return ONLY JSON:
         };
 
     } catch (err) {
-        console.error("Gemini vision failed:", err.message);
+        logGeminiError(err);
         return null;
     }
 };
