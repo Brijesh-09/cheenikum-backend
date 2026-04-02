@@ -78,8 +78,27 @@ const mapCategory = (tags) => {
     return 'other';
 };
 
+// ─── Shared JSON parser — handles markdown fences, extracts first JSON block ──
+const safeParseJSON = (text) => {
+    if (!text) return null;
+    try {
+        return JSON.parse(text);
+    } catch {
+        const stripped = text.replace(/```json|```/gi, '').trim();
+        try {
+            return JSON.parse(stripped);
+        } catch {
+            const match = stripped.match(/\{[\s\S]*\}/);
+            if (match) {
+                try { return JSON.parse(match[0]); } catch { return null; }
+            }
+            return null;
+        }
+    }
+};
+
 // ─── Gemini web search — unknown barcode lookup ───────────────────────────────
-// Uses Gemini 1.5 Flash with Google Search grounding.
+// Uses Gemini 2.0 Flash with Google Search grounding.
 // Finds real nutrition data from company sites, BigBasket, Amazon India, FSSAI.
 // Result is cached to DB — this call never runs twice for the same product.
 
@@ -110,13 +129,16 @@ Return ONLY a valid JSON object, no markdown, no explanation:
 If you cannot find reliable nutrition data for this exact product, return: {"found": false}`;
 
         const result = await model.generateContent(prompt);
-        const text = result.response.text();
 
-        // Strip markdown fences if Gemini wraps the JSON
-        const clean = text.replace(/```json|```/gi, '').trim();
-        const parsed = JSON.parse(clean);
+        const text =
+            result?.response?.text?.() ||
+            result?.response?.candidates?.[0]?.content?.parts?.[0]?.text ||
+            '';
 
-        if (!parsed.found || !parsed.name) return null;
+        if (!text) return null;
+
+        const parsed = safeParseJSON(text);
+        if (!parsed || !parsed.found || !parsed.name) return null;
 
         return {
             barcode,
@@ -145,7 +167,12 @@ If you cannot find reliable nutrition data for this exact product, return: {"fou
 
 export const extractFromLabelImage = async (base64Image, mimeType = 'image/jpeg') => {
     try {
-        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+        const model = genAI.getGenerativeModel({
+            model: 'gemini-2.0-flash',
+            generationConfig: {
+                responseMimeType: 'application/json', // force JSON output — no markdown wrapping
+            },
+        });
 
         const imagePart = {
             inlineData: { data: base64Image, mimeType },
@@ -154,7 +181,7 @@ export const extractFromLabelImage = async (base64Image, mimeType = 'image/jpeg'
         const prompt = `This is a photo of a nutrition label from an Indian packaged food product.
 Read every value visible on the nutrition facts panel carefully.
 
-Return ONLY a valid JSON object, no markdown, no explanation:
+Return a JSON object with this exact structure:
 {
   "found": true,
   "productName": "name if visible on label, else null",
@@ -167,17 +194,25 @@ Return ONLY a valid JSON object, no markdown, no explanation:
 }
 
 Rules:
-- Use the "per 100g" column values, not "per serving"
+- Use the per 100g column values, not per serving
 - If image is not a nutrition label or values are unreadable, return: {"found": false}
-- confidence = high if values are clearly readable, medium if partially readable, low if estimated`;
+- confidence is high if values are clearly readable, medium if partially readable, low if estimated`;
 
         const result = await model.generateContent([prompt, imagePart]);
-        const text = result.response.text();
 
-        const clean = text.replace(/```json|```/gi, '').trim();
-        const parsed = JSON.parse(clean);
+        // Safely extract text — handle both response shapes
+        const text =
+            result?.response?.text?.() ||
+            result?.response?.candidates?.[0]?.content?.parts?.[0]?.text ||
+            '';
 
-        if (!parsed.found) return null;
+        if (!text) {
+            console.error('Gemini vision: empty response');
+            return null;
+        }
+
+        const parsed = safeParseJSON(text);
+        if (!parsed || !parsed.found) return null;
 
         return {
             sugarPer100g: parseFloat(parsed.sugarPer100g) || 0,
