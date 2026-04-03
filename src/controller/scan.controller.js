@@ -79,11 +79,18 @@ export const scanLabel = async (req, res, next) => {
     try {
         const { imageBase64, mimeType = 'image/jpeg', servings = 1 } = req.body;
 
+        console.log(`[scanLabel] mimeType: ${mimeType}, servings: ${servings}, base64 length: ${imageBase64?.length || 0}`);
+
         if (!imageBase64) {
             return res.status(400).json({ error: 'imageBase64 is required' });
         }
 
+        if (imageBase64.length < 100) {
+            return res.status(400).json({ error: 'Image data is empty. Please try taking the photo again.' });
+        }
+
         const extracted = await extractFromLabelImage(imageBase64, mimeType);
+        console.log('[scanLabel] Gemini result:', JSON.stringify(extracted));
 
         if (!extracted) {
             return res.status(422).json({
